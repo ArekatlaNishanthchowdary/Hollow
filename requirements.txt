@@ -1,0 +1,11 @@
+python-dotenv
+google-generativeai
+ollama
+mem0ai
+pyautogui
+uiautomation
+chromadb
+neo4j
+open-interpreter
+langchain-neo4j
+rank-bm25

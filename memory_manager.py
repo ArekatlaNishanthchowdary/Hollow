@@ -18,9 +18,9 @@ config = {
     "graph_store": {
         "provider": "neo4j",
         "config": {
-            "url": "bolt://localhost:7687",
+            "url": "neo4j://127.0.0.1:7687",
             "username": "neo4j",
-            "password": "qwertyuiop"  # <--- YOUR PASSWORD HERE
+            "password": "Sunkavalli06"  # <--- YOUR PASSWORD HERE
         }
     }
 }
