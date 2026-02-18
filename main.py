@@ -6,8 +6,11 @@ from groq import Groq
 import groq_utils
 from memory_manager import MemoryJanitor
 import tools
+import uuid
 
 # --- SETUP ---
+SESSION_ID = str(uuid.uuid4())
+print(f"--- SESSION ID: {SESSION_ID} ---")
 load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
@@ -28,17 +31,19 @@ You DO NOT assume actions worked. You VERIFY them using the provided Screen Stat
 PROTOCOL:
 1. READ the 'CURRENT SCREEN STATE' provided in every user message.
 2. IF you see "Confirm Save As" or "already exists", you must resolve it (e.g., press 'y' or click 'Yes').
-3. IF the app didn't open, try again.
-4. START by finding the Desktop path via 'get_user_folder_path'.
-5. ONLY say "MISSION COMPLETE" when the file is visibly saved and the UI is stable.
+3. IF the app didn't open via Run command, try searching for it: PRESS Windows key, TYPE app name, PRESS Enter.
+4. IF that also fails, try again or ask for help.
+5. START by finding the Desktop path via 'get_user_folder_path'.
+6. ONLY say "MISSION COMPLETE" when the file is visibly saved and the UI is stable.
 
 AVAILABLE TOOLS:
-- open_app: Launches an application (e.g. 'notepad')
-- type_text: Types text into the active window
-- click_element: Moves mouse and clicks at (x, y)
-- press_hotkey: Performs keyboard shortcuts (e.g. 'ctrl+s')
-- get_user_folder_path: Returns path to Desktop/Documents
-- get_screen_text_map: Scans screen for text
+- open_app: Launches an application. Args: {"app_name": "notepad"}
+- type_text: Types text. Args: {"text": "hello", "press_enter": true}
+# - click_element: DISABLED. Use keyboard navigation ONLY.
+- press_hotkey: Keyboard shortcuts. Args: {"key_combo": "ctrl+s"}
+- get_user_folder_path: Returns path. Args: {"folder_name": "Desktop"}
+- get_screen_text_map: Scans screen. Args: {}
+- get_app_hotkeys: Asks Llama for hotkeys. Args: {"app_name": "Notepad"}
 
 COMMAND FORMAT:
 To execute a tool, you MUST output a block like this:
@@ -47,20 +52,41 @@ Example: <function=type_text>{"text": "Hello"}</function>
 
 RESTRICTIONS:
 - DO NOT hallucinate tools like 'save_file'.
+- ALWAYS use keyboard shortcuts (Hotkeys) for saving. DO NOT use the mouse to click 'File' > 'Save'.
 - To save to a specific folder:
   1. PRESS 'ctrl+s' to open the Save dialog.
-  2. REASONING: "I need to change the folder first."
-  3. PRESS 'alt+d' to focus the Address Bar.
-  4. TYPE the full folder path and PRESS 'enter' (Wait for navigation).
-  5. REASONING: "Now I can name the file."
-  6. PRESS 'alt+n' to focus the File Name field.
-  7. TYPE the filename and PRESS 'enter'.
+  2. REASONING: "I need to set the filename first."
+  3. PRESS 'alt+n' to focus the File Name field.
+  4. TYPE the filename. Args: {"text": "filename.txt", "press_enter": false}
+  5. REASONING: "Now I can change the folder."
+  6. PRESS 'alt+d' to focus the Address Bar.
+  7. TYPE the full folder path and PRESS 'enter' (Wait for navigation).
+  8. REASONING: "Finally, I can save."
+  9. PRESS 'alt+s' or 'enter' to Save.
 
 WINDOWS UI KNOWLEDGE:
 - 'Alt+D' -> Focuses Address Bar (File Explorer/Dialogs)
 - 'Alt+N' -> Focuses File Name Field
 - 'Ctrl+S' -> Save
 - 'Enter' in Address Bar -> Navigates to folder
+
+GENERAL_HEURISTICS:
+1. LAUNCH PROTOCOL:
+   - Try 'open_app' (Run command) first.
+   - CRITICAL FALLBACK: If 'open_app' fails or it is a Store App (like WhatsApp, Spotify), do this:
+     PRESS 'win', TYPE app name, PRESS 'enter'.
+   - NEVER assume an app is not installed until you try Windows Search.
+
+2. SEARCH/NAVIGATION PROTOCOL:
+   - Do NOT guess coordinates.
+   - USE 'get_app_hotkeys' to find tools for the specific app.
+   - Look for UI elements: "Search", "Find", "Magnifying Glass" icon in the screen text map.
+   - If no search bar is found, click the window center to focus and just TYPE.
+
+3. VERIFICATION PROTOCOL:
+   - You MUST confirm success by reading the screen state.
+   - Example: If opening a chat, you must see the person's name on screen.
+   - Example: If saving a file, you must see "Saved" or the file icon on Desktop.
 
 """
 
@@ -80,7 +106,7 @@ def run_agent(goal):
     
     # --- CLOSED LOOP EXECUTION ---
     MAX_TURNS = 15
-    model_name = "llama-3.3-70b-versatile"
+    model_name = "meta-llama/llama-4-scout-17b-16e-instruct"
     
     for i in range(MAX_TURNS):
         print(f"\n[Step {i+1}] Observing & Thinking...")
@@ -111,6 +137,28 @@ def run_agent(goal):
             print(f"   [Agent]: {content}")
             HISTORY.append(f"Response: {content}")
             messages.append(response_msg)
+
+            # --- MEMORY TRACKING ---
+            usage = completion.usage
+            prompt_tokens = usage.prompt_tokens if usage else 0
+            completion_tokens = usage.completion_tokens if usage else 0
+            total_tokens = usage.total_tokens if usage else 0
+            
+            graph_stats = janitor.get_memory_stats()
+            
+            print(f"\n   [MEMORY EFFICIENCY REPORT]")
+            print(f"   |-- Short-Term (Context): {total_tokens} tokens (In: {prompt_tokens}, Out: {completion_tokens})")
+            print(f"   |-- Long-Term (Graph):    {graph_stats.get('nodes', 0)} Nodes, {graph_stats.get('relationships', 0)} Edges")
+            print(f"   --------------------------\n")
+
+            # --- NEO4J LOGGING ---
+            step_data = {
+                "session_id": SESSION_ID,
+                "step_number": i + 1,
+                "action_type": "thought",  # Initial thought from model
+                "description": content[:200] + "..." if len(content) > 200 else content
+            }
+            janitor.log_step_to_neo4j(step_data)
 
             # 4. Manual Tool Parsing
             # Look for <function=name>args</function> or JSON blocks
@@ -164,18 +212,20 @@ def run_agent(goal):
             # Basic prudence: if history gets too long, we might need to trim interaction
             # For simplicity in this script, we just proceed.
             
-            print("   [System] Sleeping 5s...")
-            time.sleep(5)
+            print("   [System] Sleeping 2s...")
+            time.sleep(2)
 
         except Exception as e:
             print(f"   [Error] {e}")
             break
 
     print("--- MISSION END ---")
+    print(f"\n[FINAL OUTPUT]\nSESSION_ID: {SESSION_ID}\nCOMMAND: {goal}")
 
 if __name__ == "__main__":
-    print("WARNING: This script will take control of your mouse.")
+    print("Starting Agent (Mouse Control DISABLED)...")
     time.sleep(3)
     
     # We test the Reasoning capability
-    run_agent("Open Notepad, type 'Reasoning Test', and save it to 'C:\\Users\\Public\\Documents\\reasoning_test.txt'.")
+    run_agent("Open Notepad, write a code to check if a number is prime or not in  python, and save it as prime.py")
+    #Notepad, write a code to check if a number is prime or not in  python, and save it as prime.py in the default location

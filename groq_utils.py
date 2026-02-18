@@ -1,5 +1,6 @@
 import json
 import tools
+import ollama
 
 # Define tool schemas for Groq (OpenAI format)
 TOOLS_SCHEMA = [
@@ -15,22 +16,22 @@ TOOLS_SCHEMA = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "click_element",
-            "description": "Moves mouse slowly and clicks at coordinates.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer", "description": "X coordinate"},
-                    "y": {"type": "integer", "description": "Y coordinate"},
-                    "double_click": {"type": "boolean", "description": "Whether to double click", "default": False}
-                },
-                "required": ["x", "y"]
-            }
-        }
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "click_element",
+    #         "description": "Moves mouse slowly and clicks at coordinates.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "x": {"type": "integer", "description": "X coordinate"},
+    #                 "y": {"type": "integer", "description": "Y coordinate"},
+    #                 "double_click": {"type": "boolean", "description": "Whether to double click", "default": False}
+    #             },
+    #             "required": ["x", "y"]
+    #         }
+    #     }
+    # },
     {
         "type": "function",
         "function": {
@@ -99,17 +100,32 @@ TOOLS_SCHEMA = [
                 "required": ["folder_name"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_app_hotkeys",
+            "description": "Asks local Llama 3.2 for an app's keyboard shortcuts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string", "description": "Name of the app (e.g. Notepad, WhatsApp)"}
+                },
+                "required": ["app_name"]
+            }
+        }
     }
 ]
 
 # Map names to actual functions
 AVAILABLE_FUNCTIONS = {
     "get_screen_text_map": tools.get_screen_text_map,
-    "click_element": tools.click_element,
+    # "click_element": tools.click_element,  <-- DISABLED by User Request
     "type_text": tools.type_text,
     "open_app": tools.open_app,
     "press_hotkey": tools.press_hotkey,
     "get_user_folder_path": tools.get_user_folder_path,
+    "get_app_hotkeys": lambda app_name: ollama.chat(model='llama3.2', messages=[{'role': 'user', 'content': f"List top 5 Windows keyboard shortcuts for '{app_name}'. Return ONLY the list."}])['message']['content'],
     "save_file": lambda filename: "ERROR: You cannot save files directly. YOU MUST USE THE UI (File > Save As, or Ctrl+S). This is a Windows Desktop Agent, not a backend script."
 }
 
